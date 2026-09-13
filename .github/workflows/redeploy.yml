@@ -1,0 +1,42 @@
+name: Redeploy
+
+on:
+  workflow_call:
+    inputs:
+      artifact:
+        description: "Artifact name to redeploy, as configured in webhook-redeploy's REDEPLOY_ARTIFACTS allow-list"
+        required: true
+        type: string
+    secrets:
+      WEBHOOK_REDEPLOY_HMAC:
+        required: true
+      REDEPLOY_WEBHOOK_URL:
+        required: true
+
+jobs:
+  redeploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Call redeploy webhook
+        env:
+          WEBHOOK_HMAC_SECRET: ${{ secrets.WEBHOOK_REDEPLOY_HMAC }}
+          WEBHOOK_URL: ${{ secrets.REDEPLOY_WEBHOOK_URL }}
+          ARTIFACT: ${{ inputs.artifact }}
+        run: |
+          timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          nonce="$(openssl rand -hex 16)"
+          source="${GITHUB_REPOSITORY}@${GITHUB_SHA}"
+
+          body="$(printf '{"artifact":"%s","timestamp":"%s","nonce":"%s","source":"%s"}' \
+            "$ARTIFACT" "$timestamp" "$nonce" "$source")"
+
+          signature="sha256=$(printf '%s' "$body" \
+            | openssl dgst -sha256 -hmac "$WEBHOOK_HMAC_SECRET" \
+            | awk '{print $NF}')"
+
+          curl --fail-with-body --silent --show-error \
+            -X POST "$WEBHOOK_URL" \
+            -H 'Content-Type: application/json' \
+            -H "X-Signature-256: $signature" \
+            --data-raw "$body"
